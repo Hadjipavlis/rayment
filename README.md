@@ -71,6 +71,48 @@ const provider = new RaymentProvider({
 await provider.start(4402);
 ```
 
+### Batch Rendering (Multiple Files)
+
+```typescript
+import { RaymentClient } from 'rayment';
+
+const client = new RaymentClient({
+  hubUrl: 'https://hub.rayment.io',
+  privateKey: 'your-solana-private-key',
+});
+
+// Render multiple files at once
+const result = await client.renderBatch({
+  files: [
+    './scenes/scene1.blend',
+    './scenes/scene2.blend',
+    './scenes/scene3.blend',
+  ],
+  outputDir: './renders',
+  concurrency: 3,  // Process 3 files in parallel
+  onBatchProgress: (progress) => {
+    console.log(`Progress: ${progress.completed}/${progress.total}`);
+  },
+  onFileProgress: (file, status) => {
+    console.log(`${file}: ${status.status}`);
+  },
+});
+
+console.log(`
+  Completed: ${result.stats.completed}
+  Failed: ${result.stats.failed}
+  Total Cost: ${result.totalCost} SOL
+  Total Time: ${result.totalTime}s
+`);
+
+// Simple batch render (convenience method)
+const simpleResult = await client.renderBatchSimple(
+  ['./scene1.blend', './scene2.blend'],
+  './output',
+  (completed, total) => console.log(`${completed}/${total}`)
+);
+```
+
 ## How It Works
 
 ```
@@ -117,6 +159,8 @@ await provider.start(4402);
 | `waitForCompletion(jobId)` | Wait for job to finish |
 | `downloadResult(jobId, path)` | Download render result |
 | `render(options)` | Full render flow (request→pay→wait→download) |
+| `renderBatch(options)` | Batch render multiple files with concurrency |
+| `renderBatchSimple(files, outputDir)` | Simple batch render helper |
 | `estimateCost(options)` | Estimate render cost |
 
 ### Provider Methods

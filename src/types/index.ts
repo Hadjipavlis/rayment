@@ -226,3 +226,61 @@ export interface HubStats {
   totalVolumeSOL: number;
   avgRenderTime: number;
 }
+
+// ============================================
+// BATCH RENDERING
+// ============================================
+
+export interface BatchRenderOptions {
+  files: string[];
+  outputDir: string;
+  settings?: Partial<RenderSettings>;
+  providerId?: string;
+  concurrency?: number;
+  stopOnError?: boolean;
+  onFileProgress?: (file: string, status: BatchFileStatus) => void;
+  onBatchProgress?: (progress: BatchProgress) => void;
+}
+
+export interface BatchFileStatus {
+  file: string;
+  status: 'pending' | 'uploading' | 'paying' | 'rendering' | 'downloading' | 'completed' | 'failed';
+  progress?: number;
+  error?: string;
+  jobId?: string;
+  cost?: number;
+  renderTime?: number;
+  outputPath?: string;
+}
+
+export interface BatchProgress {
+  total: number;
+  completed: number;
+  failed: number;
+  inProgress: number;
+  totalCost: number;
+  elapsedTime: number;
+}
+
+export interface BatchRenderResult {
+  successful: BatchFileResult[];
+  failed: BatchFileResult[];
+  totalCost: number;
+  totalTime: number;
+  stats: {
+    total: number;
+    completed: number;
+    failed: number;
+    avgRenderTime: number;
+    avgCost: number;
+  };
+}
+
+export interface BatchFileResult {
+  file: string;
+  outputPath?: string;
+  jobId?: string;
+  cost?: number;
+  renderTime?: number;
+  error?: string;
+}

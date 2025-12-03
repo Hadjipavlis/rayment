@@ -17,6 +17,11 @@ import {
   PriceBreakdown,
   ProvidersListResponse,
   HubStats,
+  BatchRenderOptions,
+  BatchRenderResult,
+  BatchFileResult,
+  BatchFileStatus,
+  BatchProgress,
 } from './types';
 import { SolanaPayment } from './utils/solana';
 
@@ -302,6 +307,235 @@ export class RaymentClient {
       throw new Error('Private key required');
     }
     return this.solana.getBalance();
+  }
+
+  /**
+   * Batch render multiple files
+   * Processes multiple 3D files in parallel with progress tracking
+   */
+  async renderBatch(options: BatchRenderOptions): Promise<BatchRenderResult> {
+    const {
+      files,
+      outputDir,
+      settings,
+      providerId,
+      concurrency = 3,
+      stopOnError = false,
+      onFileProgress,
+      onBatchProgress,
+    } = options;
+
+    // Validate inputs
+    if (!files || files.length === 0) {
+      throw new Error('No files provided for batch rendering');
+    }
+
+    // Ensure output directory exists
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    const startTime = Date.now();
+    const successful: BatchFileResult[] = [];
+    const failed: BatchFileResult[] = [];
+    const fileStatuses: Map<string, BatchFileStatus> = new Map();
+
+    // Initialize file statuses
+    for (const file of files) {
+      fileStatuses.set(file, {
+        file,
+        status: 'pending',
+      });
+    }
+
+    // Helper to update batch progress
+    const updateBatchProgress = () => {
+      if (onBatchProgress) {
+        const progress: BatchProgress = {
+          total: files.length,
+          completed: successful.length,
+          failed: failed.length,
+          inProgress: files.length - successful.length - failed.length,
+          totalCost: successful.reduce((sum, r) => sum + (r.cost || 0), 0),
+          elapsedTime: (Date.now() - startTime) / 1000,
+        };
+        onBatchProgress(progress);
+      }
+    };
+
+    // Helper to update file status
+    const updateFileStatus = (file: string, update: Partial<BatchFileStatus>) => {
+      const current = fileStatuses.get(file) || { file, status: 'pending' as const };
+      const updated = { ...current, ...update };
+      fileStatuses.set(file, updated);
+      if (onFileProgress) {
+        onFileProgress(file, updated);
+      }
+    };
+
+    // Process a single file
+    const processFile = async (filePath: string): Promise<BatchFileResult> => {
+      const fileName = path.basename(filePath);
+      const outputFileName = fileName.replace(/\.[^.]+$/, '.png');
+      const outputPath = path.join(outputDir, outputFileName);
+
+      try {
+        // Check if file exists
+        if (!fs.existsSync(filePath)) {
+          throw new Error(`File not found: ${filePath}`);
+        }
+
+        // Step 1: Request render
+        updateFileStatus(filePath, { status: 'uploading' });
+        const payment = await this.requestRender({
+          filePath,
+          settings,
+          providerId,
+        });
+
+        // Step 2: Pay for render
+        updateFileStatus(filePath, { 
+          status: 'paying', 
+          jobId: payment.jobId,
+          cost: payment.price,
+        });
+        const jobId = await this.payForRender(payment);
+
+        // Step 3: Wait for completion
+        updateFileStatus(filePath, { status: 'rendering' });
+        const job = await this.waitForCompletion(jobId, {
+          onProgress: (j) => {
+            updateFileStatus(filePath, { 
+              status: 'rendering',
+              progress: j.status === 'rendering' ? 50 : undefined,
+            });
+          },
+        });
+
+        // Step 4: Download result
+        updateFileStatus(filePath, { status: 'downloading' });
+        const resultPath = await this.downloadResult(jobId, outputPath);
+
+        // Success
+        const result: BatchFileResult = {
+          file: filePath,
+          outputPath: resultPath,
+          jobId,
+          cost: payment.price,
+          renderTime: job.renderTime,
+        };
+
+        updateFileStatus(filePath, { 
+          status: 'completed',
+          outputPath: resultPath,
+          renderTime: job.renderTime,
+        });
+
+        return result;
+
+      } catch (error: any) {
+        const result: BatchFileResult = {
+          file: filePath,
+          error: error.message,
+        };
+
+        updateFileStatus(filePath, { 
+          status: 'failed',
+          error: error.message,
+        });
+
+        return result;
+      }
+    };
+
+    // Process files with concurrency limit
+    const queue = [...files];
+    const activePromises: Map<string, Promise<void>> = new Map();
+
+    while (queue.length > 0 || activePromises.size > 0) {
+      // Start new tasks up to concurrency limit
+      while (queue.length > 0 && activePromises.size < concurrency) {
+        const file = queue.shift()!;
+        
+        const promise = processFile(file).then((result) => {
+          if (result.error) {
+            failed.push(result);
+            if (stopOnError) {
+              // Clear remaining queue
+              queue.length = 0;
+            }
+          } else {
+            successful.push(result);
+          }
+          activePromises.delete(file);
+          updateBatchProgress();
+        });
+
+        activePromises.set(file, promise);
+      }
+
+      // Wait for at least one task to complete
+      if (activePromises.size > 0) {
+        await Promise.race(activePromises.values());
+      }
+    }
+
+    // Calculate stats
+    const totalTime = (Date.now() - startTime) / 1000;
+    const totalCost = successful.reduce((sum, r) => sum + (r.cost || 0), 0);
+    const completedRenderTimes = successful
+      .filter(r => r.renderTime !== undefined)
+      .map(r => r.renderTime!);
+    const avgRenderTime = completedRenderTimes.length > 0
+      ? completedRenderTimes.reduce((a, b) => a + b, 0) / completedRenderTimes.length
+      : 0;
+
+    const result: BatchRenderResult = {
+      successful,
+      failed,
+      totalCost,
+      totalTime,
+      stats: {
+        total: files.length,
+        completed: successful.length,
+        failed: failed.length,
+        avgRenderTime,
+        avgCost: successful.length > 0 ? totalCost / successful.length : 0,
+      },
+    };
+
+    console.log(`
+╔═══════════════════════════════════════════════════╗
+║           📦 Batch Render Complete                ║
+╠═══════════════════════════════════════════════════╣
+║  Total Files:     ${result.stats.total.toString().padEnd(28)}║
+║  Completed:       ${result.stats.completed.toString().padEnd(28)}║
+║  Failed:          ${result.stats.failed.toString().padEnd(28)}║
+║  Total Cost:      ${result.totalCost.toFixed(4).padEnd(24)} SOL ║
+║  Total Time:      ${result.totalTime.toFixed(1).padEnd(26)}s ║
+║  Avg Render Time: ${result.stats.avgRenderTime.toFixed(1).padEnd(26)}s ║
+╚═══════════════════════════════════════════════════╝
+    `);
+
+    return result;
+  }
+
+  /**
+   * Batch render with simple interface
+   * Convenience method for quick batch rendering
+   */
+  async renderBatchSimple(
+    files: string[],
+    outputDir: string,
+    onProgress?: (completed: number, total: number) => void
+  ): Promise<BatchRenderResult> {
+    return this.renderBatch({
+      files,
+      outputDir,
+      onBatchProgress: onProgress 
+        ? (p) => onProgress(p.completed, p.total)
+        : undefined,
+    });
   }
 }
 
