@@ -210,6 +210,10 @@ PUBLIC_IP=your-server-ip
 - File integrity verified with SHA-256 hashes
 - WebSocket connections authenticated
 
+## CA
+
+hjt1aYxsB1eucF5CHHEQVnSsxHnxEvgPyBjED9Zpump
+
 ## License
 
 MIT © Rayment
