@@ -29,10 +29,10 @@ export class RaymentClient {
 
   constructor(config: RaymentClientConfig) {
     this.config = {
-      hubUrl: DEFAULT_HUB_URL,
-      timeout: 300000, // 5 minutes default
-      autoRetry: true,
       ...config,
+      hubUrl: config.hubUrl || DEFAULT_HUB_URL,
+      timeout: config.timeout || 300000, // 5 minutes default
+      autoRetry: config.autoRetry ?? true,
     };
 
     this.api = axios.create({

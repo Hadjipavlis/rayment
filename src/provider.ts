@@ -34,8 +34,8 @@ export class RaymentProvider {
 
   constructor(config: RaymentProviderConfig) {
     this.config = {
-      hubUrl: DEFAULT_HUB_URL,
       ...config,
+      hubUrl: config.hubUrl || DEFAULT_HUB_URL,
     };
     this.solana = new SolanaPayment(undefined, config.privateKey);
     this.workDir = path.join(process.cwd(), 'render-work');
@@ -82,14 +82,15 @@ export class RaymentProvider {
       console.log(`🎬 Received job: ${jobId}`);
 
       this.isRendering = true;
-      res.json({ status: 'accepted' });
-
+      
       // Process render asynchronously
       this.processRender(req.file.path, req.file.originalname || 'scene.blend', jobId, settings)
         .catch(err => console.error('Render error:', err))
         .finally(() => {
           this.isRendering = false;
         });
+
+      return res.json({ status: 'accepted' });
     });
 
     return app;
@@ -254,7 +255,7 @@ print("RENDER_COMPLETE")
     this.providerId = res.data.data.providerId;
     console.log(`✅ Registered as: ${this.providerId}`);
     
-    return this.providerId;
+    return this.providerId!;
   }
 
   /**
